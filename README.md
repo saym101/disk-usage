@@ -22,7 +22,6 @@
 
 ```bash
 # Скопируйте скрипт
-```
 wget https://raw.githubusercontent.com/saym101/disk-usage/refs/heads/main/disk-usage.sh
 ```
 # Сделайте скрипт исполняемым
