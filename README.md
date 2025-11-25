@@ -24,9 +24,11 @@
 wget https://raw.githubusercontent.com/saym101/disk-usage/refs/heads/main/disk-usage.sh
 ```
 # Сделайте скрипт исполняемым
+```
 chmod +x disk-usage.sh
-
+```
 # Запустите
+```
 ./disk-usage.sh
 ```
 
