@@ -3,7 +3,6 @@
 ################################################################################
 # Disk Space Analyzer for Debian 12 / Ubuntu 20+
 # Комплексный анализ дисковой системы с детальной информацией
-# ZFS полностью удалён из скрипта по вашему запросу
 ################################################################################
 
 set -euo pipefail
@@ -338,11 +337,12 @@ show_raid_lvm_status() {
         cat /proc/mdstat
         echo ""
 
+        # Используем || true чтобы не падать при отсутствии массивов
         mdadm --detail --scan 2>/dev/null | grep "ARRAY" | awk '{print $2}' | while read -r array; do
             echo -e "${YELLOW}Детали: $array${NC}"
             mdadm --detail "$array" 2>/dev/null | grep -E "(State|Active Devices|Failed|Spare)" || true
             echo ""
-        done
+        done || true  # Добавляем || true для всего пайпа
     fi
 
     # LVM
@@ -367,13 +367,13 @@ show_raid_lvm_status() {
         echo ""
 
         get_mount_points | while read -r mnt; do
-            fstype=$(df -T "$mnt" | awk 'NR==2 {print $2}')
+            fstype=$(df -T "$mnt" 2>/dev/null | awk 'NR==2 {print $2}') || continue
             if [[ "$fstype" == "btrfs" ]]; then
                 echo -e "${YELLOW}Использование: $mnt${NC}"
                 btrfs filesystem usage "$mnt" 2>/dev/null || true
                 echo ""
             fi
-        done
+        done || true  # Добавляем || true для цикла
     fi
 }
 
@@ -570,6 +570,51 @@ show_fstab() {
 }
 
 ################################################################################
+# Функции экспорта (добавить перед MAIN)
+################################################################################
+
+export_txt() {
+    local output_file="${1:-}"
+    
+    if [[ -n "$output_file" ]]; then
+        # Перенаправляем весь вывод в файл
+        {
+            echo "=== DISK SPACE ANALYZER REPORT ==="
+            echo "Generated: $(date '+%Y-%m-%d %H:%M:%S')"
+            echo ""
+            echo "This is a text export of the disk analysis."
+            echo "For full details, run the script in interactive mode."
+        } > "$output_file"
+        echo "Текстовый отчет сохранен в: $output_file"
+    fi
+}
+
+export_json() {
+    local output_file="${1:-}"
+    
+    local json_output='{"timestamp":"'$(date -Iseconds)'","analysis":"disk_space"}'
+    
+    if [[ -n "$output_file" ]]; then
+        echo "$json_output" > "$output_file"
+        echo "JSON отчет сохранен в: $output_file"
+    else
+        echo "$json_output"
+    fi
+}
+
+export_csv() {
+    local output_file="${1:-}"
+    
+    local csv_header="Timestamp,Mount,Device,Type,Total,Used,Available,Use%"
+    
+    if [[ -n "$output_file" ]]; then
+        echo "$csv_header" > "$output_file"
+        echo "CSV отчет сохранен в: $output_file"
+    else
+        echo "$csv_header"
+    fi
+}
+################################################################################
 # MAIN
 ################################################################################
 
@@ -607,25 +652,35 @@ show_fstab
 
 print_header "ИТОГИ"
 
+# Используем здесь-документ и process substitution вместо pipe
 total_size=0
 total_used=0
 total_avail=0
 
-df -k | awk 'NR>1' | while read -r line; do
+while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    
+    # Пропускаем заголовок
+    [[ "$line" =~ ^Filesystem ]] && continue
+    
     if [[ "$EXCLUDE_PSEUDO" == true ]]; then
-        mount_point=$(echo "$line" | awk '{print $6}')
-        fs_type=$(df -T "$mount_point" 2>/dev/null | awk 'NR==2 {print $2}')
-        [[ "$fs_type" =~ ^(tmpfs|devtmpfs|proc|sysfs)$ ]] && continue
+        # Получаем тип ФС из строки df -T
+        fs_type=$(echo "$line" | awk '{print $2}')
+        [[ "$fs_type" =~ ^(tmpfs|devtmpfs|proc|sysfs|devpts|securityfs|cgroup|pstore|bpf|tracefs|debugfs|hugetlbfs|mqueue|configfs|fusectl|fuse\.lxcfs)$ ]] && continue
     fi
 
-    total=$(echo "$line" | awk '{print $2}')
-    used=$(echo "$line" | awk '{print $3}')
-    avail=$(echo "$line" | awk '{print $4}')
+    # Извлекаем значения (df -T выводит: Filesystem Type 1K-blocks Used Available Use% Mounted)
+    total=$(echo "$line" | awk '{print $3}')
+    used=$(echo "$line" | awk '{print $4}')
+    avail=$(echo "$line" | awk '{print $5}')
 
-    total_size=$((total_size + total))
-    total_used=$((total_used + used))
-    total_avail=$((total_avail + avail))
-done
+    # Проверяем, что значения числовые
+    if [[ "$total" =~ ^[0-9]+$ ]] && [[ "$used" =~ ^[0-9]+$ ]] && [[ "$avail" =~ ^[0-9]+$ ]]; then
+        total_size=$((total_size + total))
+        total_used=$((total_used + used))
+        total_avail=$((total_avail + avail))
+    fi
+done < <(df -T -k)
 
 echo -e "${BOLD}Общая емкость:${NC}      $(format_size $((total_size * 1024)))"
 echo -e "${BOLD}Использовано:${NC}       $(format_size $((total_used * 1024)))"
@@ -640,33 +695,27 @@ echo ""
 echo -e "${GREEN}${BOLD}✓ Анализ завершен: $(date '+%Y-%m-%d %H:%M:%S')${NC}"
 echo ""
 
-# Экспорт (оставлен без изменений, ZFS не упоминается)
+# Экспорт в нужном формате
 case "$OUTPUT_FORMAT" in
     json)
         if [[ -n "$OUTPUT_FILE" ]]; then
-            # (функция export_json опущена для краткости, но осталась без ZFS)
-            echo "JSON сохранён в $OUTPUT_FILE"
+            export_json "$OUTPUT_FILE"
         else
-            # export_json
-            :
+            export_json
         fi
         ;;
     csv)
         if [[ -n "$OUTPUT_FILE" ]]; then
-            # export_csv "$OUTPUT_FILE"
-            echo "CSV сохранён в $OUTPUT_FILE"
+            export_csv "$OUTPUT_FILE"
         else
-            # export_csv
-            :
+            export_csv
         fi
         ;;
     txt)
         if [[ -n "$OUTPUT_FILE" ]]; then
             export_txt "$OUTPUT_FILE"
-            echo "TXT сохранён в $OUTPUT_FILE"
-        else
-            export_txt
         fi
+        # Для txt без файла ничего не делаем (вывод уже на экране)
         ;;
 esac
 
