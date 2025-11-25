@@ -21,10 +21,10 @@
 ## 📦 Установка
 
 ```bash
-# Клонируйте репозиторий
-git clone https://github.com/yourusername/disk-space-analyzer.git
-cd disk-space-analyzer
-
+# Скопируйте скрипт
+```
+wget https://raw.githubusercontent.com/saym101/disk-usage/refs/heads/main/disk-usage.sh
+```
 # Сделайте скрипт исполняемым
 chmod +x disk-usage.sh
 
