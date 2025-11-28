@@ -115,86 +115,54 @@ fi
 # Проверка и установка необходимых утилит
 ################################################################################
 REQUIRED_TOOLS="df findmnt lsblk du sort awk sed grep"
-OPTIONAL_TOOLS="lsof mdadm pvs vgs lvs btrfs docker snap smartctl"
+OPTIONAL_TOOLS="lsof mdadm pvs vgs lvs btrfs docker snap smartctl nvme jq quota repquota xfs_quota"
+
 declare -A TOOL_PACKAGE_MAP=(
-    [lsof]="lsof"
-    [mdadm]="mdadm"
-    [pvs]="lvm2"
-    [vgs]="lvm2"
-    [lvs]="lvm2"
-    [btrfs]="btrfs-progs"
-    [docker]="docker.io"
-    [snap]="snapd"
-    [smartctl]="smartmontools"
+  [df]="coreutils" [du]="coreutils" [sort]="coreutils" [awk]="gawk" [sed]="sed" [grep]="grep"
+  [lsblk]="util-linux" [findmnt]="util-linux"
+  [lsof]="lsof"
+  [mdadm]="mdadm"
+  [pvs]="lvm2" [vgs]="lvm2" [lvs]="lvm2"
+  [btrfs]="btrfs-progs"
+  [docker]="docker.io"
+  [snap]="snapd"
+  [smartctl]="smartmontools"
+  [nvme]="nvme-cli"
+  [jq]="jq"
+  [quota]="quota" [repquota]="quota" [xfs_quota]="xfsprogs"
 )
-MISSING_REQUIRED=()
-MISSING_OPTIONAL=()
+
+missing_required=()
+missing_optional=()
 
 echo -e "${CYAN}${BOLD}=== Проверка необходимых утилит ===${NC}\n"
 
-for tool in $REQUIRED_TOOLS; do
-    if ! command -v "$tool" &> /dev/null; then
-        MISSING_REQUIRED+=("$tool")
-    fi
-done
+for t in $REQUIRED_TOOLS; do command -v "$t" >/dev/null 2>&1 || missing_required+=("$t"); done
+for t in $OPTIONAL_TOOLS;  do command -v "$t" >/dev/null 2>&1 || missing_optional+=("$t");  done
 
-for tool in $OPTIONAL_TOOLS; do
-    if ! command -v "$tool" &> /dev/null; then
-        MISSING_OPTIONAL+=("$tool")
-    fi
-done
-
-if [[ ${#MISSING_REQUIRED[@]} -gt 0 ]]; then
-    echo -e "${RED}Отсутствуют обязательные утилиты:${NC} ${MISSING_REQUIRED[*]}"
-    echo -e "${YELLOW}Установите их командой:${NC}"
-    echo "  apt update && apt install -y coreutils util-linux"
-    exit 1
+if [[ ${#missing_required[@]} -gt 0 ]]; then
+  echo -e "${RED}Отсутствуют обязательные утилиты:${NC}"
+  for t in "${missing_required[@]}"; do echo "  - $t (пакет: ${TOOL_PACKAGE_MAP[$t]-?})"; done
+  req_pkgs=$(for t in "${missing_required[@]}"; do echo "${TOOL_PACKAGE_MAP[$t]}"; done | sort -u)
+  echo -e "${YELLOW}Установите:${NC}\n  apt update && apt install -y ${req_pkgs}\n"
+  exit 1
 fi
 
-if [[ ${#MISSING_OPTIONAL[@]} -gt 0 ]]; then
-    echo -e "${YELLOW}Отсутствуют опциональные утилиты (некоторые функции будут недоступны):${NC}"
-    echo "  ${MISSING_OPTIONAL[*]}"
-    echo -e "${YELLOW}Для полного функционала установите:${NC}"
-    missing_packages=()
-    for tool in "${MISSING_OPTIONAL[@]}"; do
-        pkg=${TOOL_PACKAGE_MAP[$tool]-}
-        [[ -z "$pkg" ]] && continue
-        if [[ " ${missing_packages[*]} " != *" $pkg "* ]]; then
-            missing_packages+=("$pkg")
-        fi
-    done
-
-    available_packages=()
-    unavailable_packages=()
-
-    is_pkg_available() {
-        local pkg="$1"
-        local candidate
-        candidate=$(apt-cache policy "$pkg" 2>/dev/null | awk -F': ' '/Candidate:/ {print $2; exit}')
-        [[ -n "$candidate" && "$candidate" != "(none)" ]]
-    }
-
-    for pkg in "${missing_packages[@]}"; do
-        if is_pkg_available "$pkg"; then
-            available_packages+=("$pkg")
-        else
-            unavailable_packages+=("$pkg")
-        fi
-    done
-
-    if [[ ${#available_packages[@]} -gt 0 ]]; then
-        echo "  apt install -y ${available_packages[*]}"
-    fi
-    if [[ ${#unavailable_packages[@]} -gt 0 ]]; then
-        echo -e "${YELLOW}Недоступные в текущих репозиториях:${NC} ${unavailable_packages[*]}"
-        echo "  Добавьте нужные репозитории (например, contrib/non-free или backports) или установите пакеты вручную."
-    fi
-    echo ""
-    read -p "Продолжить без них? (y/N): " -n 1 -r
-    echo
-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-        exit 0
-    fi
+if [[ ${#missing_optional[@]} -gt 0 ]]; then
+  echo -e "${YELLOW}Отсутствуют опциональные утилиты (некоторые функции будут недоступны):${NC}"
+  for t in "${missing_optional[@]}"; do echo "  - $t (пакет: ${TOOL_PACKAGE_MAP[$t]-?})"; done
+  opt_pkgs=$(for t in "${missing_optional[@]}"; do echo "${TOOL_PACKAGE_MAP[$t]}"; done | sort -u)
+  # проверим доступность в репах
+  available=(); unavailable=()
+  for p in $opt_pkgs; do
+    cand=$(apt-cache policy "$p" 2>/dev/null | awk -F': ' '/Candidate:/ {print $2; exit}')
+    if [[ -n "$cand" && "$cand" != "(none)" ]]; then available+=("$p"); else unavailable+=("$p"); fi
+  done
+  [[ ${#available[@]} -gt 0 ]]   && echo -e "${YELLOW}Можно установить:${NC}\n  apt install -y ${available[*]}"
+  [[ ${#unavailable[@]} -gt 0 ]] && echo -e "${YELLOW}Недоступны в текущих репозиториях:${NC} ${unavailable[*]}\n  Проверь /etc/apt/sources.list (trixie main contrib non-free non-free-firmware) и сделай: apt update"
+  echo
+  read -p "Продолжить без них? (y/N): " -n 1 -r; echo
+  [[ $REPLY =~ ^[Yy]$ ]] || exit 0
 fi
 
 echo -e "${GREEN}✓ Проверка завершена${NC}\n"
